@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Virtuelle Umgebung
+.venv/
+venv/
+
+# Test-Caches
+.pytest_cache/
+
+# Der Tresor selbst (verschlüsselt, aber gehört nicht ins Repo)
+*.vault
+*.vault.tmp
+
+# Alte Klartext-Datenbank
+*.db
+*.db.tmp
+
+# macOS
+.DS_Store
