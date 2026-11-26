@@ -30,7 +30,8 @@ def test_db_file_is_encrypted():
         path = os.path.join(d, "database.vault")
         v = Vault.create(path, PW)
         with v.write() as con:
-            con.execute("INSERT INTO password VALUES (?,?,?)", ("bank.de", "s3cret!", "IBAN"))
+            con.execute("INSERT INTO password (url, username, password, note) VALUES (?,?,?,?)",
+                        ("bank.de", "yanic", "s3cret!", "IBAN"))
         v.close()
 
         raw = open(path, "rb").read()
@@ -73,7 +74,7 @@ def test_roundtrip_and_no_plaintext_db_on_disk():
         path = os.path.join(d, "database.vault")
         v = Vault.create(path, PW)
         with v.write() as con:
-            con.execute("INSERT INTO password VALUES (?,?,?)", ("a.de", "geheim", ""))
+            con.execute("INSERT INTO password (url, username, password, note) VALUES (?,?,?,?)", ("a.de", "u", "geheim", ""))
         v.close()
 
         v = Vault.open(path, PW)
@@ -89,7 +90,7 @@ def test_change_master_password():
         path = os.path.join(d, "database.vault")
         v = Vault.create(path, PW)
         with v.write() as con:
-            con.execute("INSERT INTO password VALUES (?,?,?)", ("x.de", "p", "n"))
+            con.execute("INSERT INTO password (url, username, password, note) VALUES (?,?,?,?)", ("x.de", "u", "p", "n"))
         v.change_master_password("anderes-langes-passwort")
         v.close()
 
@@ -106,15 +107,26 @@ def test_public_api():
     with _tmpdir() as d:
         path = os.path.join(d, "database.vault")
         dbinit.init_db(path=path, master_password=PW)
-        dbinit.create_password_entry("github.com", "gh-token", "work")
+        dbinit.create_password_entry("github.com", "gh-token", "work", username="yanic")
         assert [r["url"] for r in dbinit.list_all_passwords()] == ["github.com"]
         assert dbinit.search_password_by_url("github.com")[0]["note"] == "work"
+        assert dbinit.entry_exists("github.com") and not dbinit.entry_exists("gibtsnicht.de")
         dbinit.lock()
         assert not dbinit.is_unlocked()
 
         dbinit.unlock(PW, path=path)
         dbinit.update_password_entry("github.com", password="neu")
-        assert dbinit.search_password_by_url("github.com")[0]["password"] == "neu"
+        eintrag = dbinit.search_password_by_url("github.com")[0]
+        assert eintrag["password"] == "neu"
+        assert eintrag["username"] == "yanic"  # nicht ueberschrieben
+
+        # save_password_entry legt an oder ueberschreibt (Upsert)
+        dbinit.save_password_entry("github.com", "neu@user", "pw2", "note2")
+        dbinit.save_password_entry("neu.de", "u", "p", "n")
+        assert len(dbinit.list_all_passwords()) == 2
+        eintrag = dbinit.search_password_by_url("github.com")[0]
+        assert (eintrag["username"], eintrag["password"], eintrag["note"]) == (
+            "neu@user", "pw2", "note2")
         dbinit.lock()
 
 
@@ -124,7 +136,7 @@ def test_migration_of_plaintext_db():
         vault = os.path.join(d, "database.vault")
         con = sqlite3.connect(legacy)
         con.execute("CREATE TABLE password (url TEXT PRIMARY KEY, password TEXT NOT NULL, note TEXT)")
-        con.execute("INSERT INTO password VALUES ('alt.de', 'klartext', 'migriert')")
+        con.execute("INSERT INTO password (url, password, note) VALUES ('alt.de', 'klartext', 'migriert')")
         con.commit()
         con.close()
 
@@ -144,7 +156,7 @@ def test_payload_is_portable_sql_dump():
         path = os.path.join(d, "database.vault")
         v = Vault.create(path, PW)
         with v.write() as con:
-            con.execute("INSERT INTO password VALUES (?,?,?)", ("a.de", "p", ""))
+            con.execute("INSERT INTO password (url, username, password, note) VALUES (?,?,?,?)", ("a.de", "u", "p", ""))
         v.close()
 
         raw = open(path, "rb").read()
@@ -158,6 +170,27 @@ def test_payload_is_portable_sql_dump():
         con = sqlite3.connect(":memory:")
         con.executescript(text)
         assert con.execute("SELECT password FROM password").fetchone()[0] == "p"
+
+
+def test_old_schema_is_migrated():
+    """Ein Tresor von vor dem username-Feld muss weiter funktionieren."""
+    import sqlite3 as sq
+    old = ("BEGIN TRANSACTION;\n"
+           "CREATE TABLE password (url TEXT PRIMARY KEY, password TEXT NOT NULL, note TEXT);\n"
+           "INSERT INTO password VALUES('alt.de','klartext','notiz');\n"
+           "COMMIT;\n")
+    with _tmpdir() as d:
+        path = os.path.join(d, "database.vault")
+        from models.crypto import KDF_ITERATIONS, SALT_LEN, encrypt_blob, pack_header
+        salt = os.urandom(SALT_LEN)
+        with open(path, "wb") as fh:
+            fh.write(pack_header(salt, KDF_ITERATIONS) + encrypt_blob(derive_key(PW, salt), old.encode()))
+
+        v = Vault.open(path, PW)
+        with v.read() as con:
+            row = con.execute("SELECT url, username, password FROM password").fetchone()
+            assert tuple(row) == ("alt.de", "", "klartext")
+        v.close()
 
 
 if __name__ == "__main__":

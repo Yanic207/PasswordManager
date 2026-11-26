@@ -37,10 +37,20 @@ from .crypto import (
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS password (
     url      TEXT PRIMARY KEY,
+    username TEXT NOT NULL DEFAULT '',
     password TEXT NOT NULL,
     note     TEXT
 );
 """
+
+
+def _migrate_schema(con):
+    """Ältere Tresore (ohne username-Spalte) nachziehen."""
+    columns = {row[1] for row in con.execute("PRAGMA table_info(password)")}
+    if "username" not in columns:
+        con.execute(
+            "ALTER TABLE password ADD COLUMN username TEXT NOT NULL DEFAULT ''"
+        )
 
 
 class Vault:
@@ -80,8 +90,9 @@ class Vault:
         con = sqlite3.connect(":memory:")
         con.row_factory = sqlite3.Row
         con.executescript(plaintext.decode("utf-8"))
-        # Falls eine ältere Tresor-Version das Schema noch nicht hatte.
+        # Schema auf den aktuellen Stand bringen (neue Spalten, fehlende Tabelle).
         con.executescript(SCHEMA)
+        _migrate_schema(con)
         return cls(path, key, salt, iterations, con)
 
     def _dump(self):

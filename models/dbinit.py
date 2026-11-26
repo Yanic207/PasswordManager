@@ -65,22 +65,46 @@ def init_db(path=VAULT_PATH, master_password=None):
 
 
 # -- CRUD ----------------------------------------------------------------------
-def create_password_entry(url, password, note=""):
+def create_password_entry(url, password, note="", username=""):
     """Einen Eintrag anlegen (wird sofort verschlüsselt gespeichert)."""
     with get_vault().write() as con:
         con.execute(
-            "INSERT INTO password (url, password, note) VALUES (?, ?, ?)",
-            (url, password, note),
+            "INSERT INTO password (url, username, password, note) VALUES (?, ?, ?, ?)",
+            (url, username, password, note),
         )
 
 
-def update_password_entry(url, password=None, note=None):
-    """Passwort und/oder Notiz eines bestehenden Eintrags ändern."""
+def save_password_entry(url, username, password, note=""):
+    """Eintrag anlegen oder überschreiben - ein Aufruf, kein Vorher-Nachher."""
     with get_vault().write() as con:
-        if password is not None:
-            con.execute("UPDATE password SET password = ? WHERE url = ?", (password, url))
-        if note is not None:
-            con.execute("UPDATE password SET note = ? WHERE url = ?", (note, url))
+        con.execute(
+            """
+            INSERT INTO password (url, username, password, note) VALUES (?, ?, ?, ?)
+            ON CONFLICT(url) DO UPDATE SET
+                username = excluded.username,
+                password = excluded.password,
+                note     = excluded.note
+            """,
+            (url, username, password, note),
+        )
+
+
+def entry_exists(url):
+    with get_vault().read() as con:
+        row = con.execute("SELECT 1 FROM password WHERE url = ?", (url,)).fetchone()
+    return row is not None
+
+
+def update_password_entry(url, password=None, note=None, username=None):
+    """Einzelne Felder eines bestehenden Eintrags ändern."""
+    with get_vault().write() as con:
+        for spalte, wert in (
+            ("username", username),
+            ("password", password),
+            ("note", note),
+        ):
+            if wert is not None:
+                con.execute(f"UPDATE password SET {spalte} = ? WHERE url = ?", (wert, url))
 
 
 def delete_password_entry(url):
@@ -88,17 +112,20 @@ def delete_password_entry(url):
         con.execute("DELETE FROM password WHERE url = ?", (url,))
 
 
+SPALTEN = "url, username, password, note"
+
+
 def list_all_passwords():
     """Alle Einträge zurückgeben."""
     with get_vault().read() as con:
-        return con.execute("SELECT url, password, note FROM password ORDER BY url").fetchall()
+        return con.execute(f"SELECT {SPALTEN} FROM password ORDER BY url").fetchall()
 
 
 def search_password_by_url(url):
     """Einträge zu einer URL zurückgeben."""
     with get_vault().read() as con:
         return con.execute(
-            "SELECT url, password, note FROM password WHERE url = ?", (url,)
+            f"SELECT {SPALTEN} FROM password WHERE url = ?", (url,)
         ).fetchall()
 
 
@@ -122,13 +149,15 @@ def migrate_plaintext_db(master_password, path=VAULT_PATH, legacy=LEGACY_DB_PATH
 
     with closing(sqlite3.connect(legacy)) as old:
         old.row_factory = sqlite3.Row
-        rows = old.execute("SELECT url, password, note FROM password").fetchall()
+        spalten = {row[1] for row in old.execute("PRAGMA table_info(password)")}
+        username = "username" if "username" in spalten else "'' AS username"
+        rows = old.execute(f"SELECT url, {username}, password, note FROM password").fetchall()
 
     _vault = Vault.create(path, master_password)
     with _vault.write() as con:
         con.executemany(
-            "INSERT INTO password (url, password, note) VALUES (?, ?, ?)",
-            [(r["url"], r["password"], r["note"] or "") for r in rows],
+            "INSERT INTO password (url, username, password, note) VALUES (?, ?, ?, ?)",
+            [(r["url"], r["username"], r["password"], r["note"] or "") for r in rows],
         )
     migrated = len(rows)
     lock()
@@ -157,6 +186,8 @@ __all__ = [
     "get_vault",
     "init_db",
     "create_password_entry",
+    "save_password_entry",
+    "entry_exists",
     "update_password_entry",
     "delete_password_entry",
     "list_all_passwords",

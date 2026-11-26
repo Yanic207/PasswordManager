@@ -1,148 +1,90 @@
 #!/usr/bin/env python3
-"""Kommandozeile für den verschlüsselten Passwort-Tresor.
+"""Passwörter erfassen.
 
-Beispiele:
-    python cli.py init                       # neuen Tresor anlegen
-    python cli.py add github.com             # Eintrag hinzufügen
-    python cli.py list                       # alle Einträge
-    python cli.py get github.com             # ein Eintrag
-    python cli.py passwd                     # Master-Passwort ändern
-    python cli.py migrate                    # alte database.db verschlüsseln
+Beim ersten Start wird der Tresor automatisch angelegt und nach einem neuen
+Master-Passwort gefragt. Danach läuft eine Schleife: URL, Benutzername,
+Passwort, Notiz -> speichern -> nächster Eintrag.
+
+URL einfach leer lassen (Enter) = fertig.
+Zum Ansehen: show.py
 """
 
-import argparse
 import getpass
+import os
 import sys
 
 from models import dbinit
 from models.crypto import InvalidPassword
 
+MIN_MASTER_LEN = 8
+MAX_VERSUCHE = 3
 
-def ask_master_password(confirm=False):
-    pw = getpass.getpass("Master-Passwort: ")
-    if confirm:
+
+def neues_master_passwort():
+    """Neues Master-Passwort zweimal abfragen, bis es passt."""
+    while True:
+        pw = getpass.getpass("Neues Master-Passwort: ")
+        if len(pw) < MIN_MASTER_LEN:
+            print(f"  Bitte mindestens {MIN_MASTER_LEN} Zeichen.")
+            continue
         if pw != getpass.getpass("Master-Passwort wiederholen: "):
-            sys.exit("Die Passwörter stimmen nicht überein.")
-        if len(pw) < 8:
-            sys.exit("Das Master-Passwort braucht mindestens 8 Zeichen.")
-    return pw
+            print("  Die Passwörter stimmen nicht überein.")
+            continue
+        return pw
 
 
-def unlock(args):
+def tresor_oeffnen():
+    """Tresor anlegen (falls nötig) und entsperren."""
+    if os.path.exists(dbinit.VAULT_PATH):
+        for versuch in range(MAX_VERSUCHE):
+            try:
+                dbinit.unlock(getpass.getpass("Master-Passwort: "))
+                return
+            except InvalidPassword as exc:
+                rest = MAX_VERSUCHE - versuch - 1
+                print(f"  {exc}" + (f" Noch {rest} Versuche." if rest else ""))
+        sys.exit("Abgebrochen.")
+
+    print(f"Kein Tresor gefunden - {dbinit.VAULT_PATH} wird angelegt.")
+    print("WICHTIG: Dieses Master-Passwort ist nicht wiederherstellbar!\n")
+    dbinit.init_db(master_password=neues_master_passwort())
+    print(f"Tresor angelegt: {dbinit.VAULT_PATH}\n")
+
+
+def eintrag_erfassen():
+    """Fragt die Felder eines Eintrags ab und speichert ihn."""
+    url = input("URL: ").strip()
+    if not url:
+        return False
+
+    if dbinit.entry_exists(url):
+        antwort = input(f"  '{url}' existiert schon - überschreiben? [j/N] ").strip().lower()
+        if antwort not in ("j", "ja", "y"):
+            print("  übersprungen.\n")
+            return True
+
+    username = input("Benutzername: ").strip()
+    password = getpass.getpass("Passwort: ")
+    note = input("Notiz (optional): ").strip()
+
+    dbinit.save_password_entry(url, username, password, note)
+    print(f"  gespeichert: {url}\n")
+    return True
+
+
+def main():
+    tresor_oeffnen()
+    print("Neue Einträge - URL leer lassen + Enter zum Beenden.\n")
+    anzahl = 0
     try:
-        dbinit.unlock(args.master_password or ask_master_password(), path=args.vault)
-    except FileNotFoundError:
-        sys.exit(f"Kein Tresor unter {args.vault}. Erst 'init' ausführen.")
-    except InvalidPassword as exc:
-        sys.exit(str(exc))
-
-
-def cmd_init(args):
-    dbinit.init_db(path=args.vault, master_password=args.master_password or ask_master_password(confirm=True))
-    print(f"Tresor angelegt: {args.vault}")
-
-
-def cmd_add(args):
-    # Reihenfolge: Eintragsdaten zuerst, Master-Passwort zuletzt (einmal entsperren).
-    if args.note is not None:
-        note = args.note
-    elif sys.stdin.isatty():
-        note = input("Notiz (optional): ")
-    else:
-        note = ""
-    password = args.password or ask_master_password(confirm=True)
-    unlock(args)
-    dbinit.create_password_entry(args.url, password, note)
-    print(f"Gespeichert: {args.url}")
-
-
-def cmd_list(args):
-    unlock(args)
-    rows = dbinit.list_all_passwords()
-    if not rows:
-        print("Tresor ist leer.")
-        return
-    for row in rows:
-        shown = row["password"] if args.show else "*" * 12
-        print(f"{row['url']:<35} {shown}  {row['note'] or ''}")
-
-
-def cmd_get(args):
-    unlock(args)
-    rows = dbinit.search_password_by_url(args.url)
-    if not rows:
-        sys.exit(f"Kein Eintrag für {args.url}.")
-    for row in rows:
-        print(f"url:      {row['url']}")
-        print(f"password: {row['password']}")
-        print(f"note:     {row['note'] or ''}")
-
-
-def cmd_delete(args):
-    unlock(args)
-    dbinit.delete_password_entry(args.url)
-    print(f"Gelöscht: {args.url}")
-
-
-def cmd_passwd(args):
-    unlock(args)
-    dbinit.change_master_password(ask_master_password(confirm=True))
-    print("Master-Passwort geändert, Tresor neu verschlüsselt.")
-
-
-def cmd_migrate(args):
-    try:
-        count = dbinit.migrate_plaintext_db(
-            args.master_password or ask_master_password(confirm=True),
-            path=args.vault,
-            legacy=args.legacy,
-        )
-    except (FileExistsError, FileNotFoundError) as exc:
-        sys.exit(str(exc))
-    print(f"{count} Einträge nach {args.vault} verschlüsselt.")
-    print(f"Klartext-Datei {args.legacy} wurde überschrieben und gelöscht.")
-
-
-def build_parser():
-    p = argparse.ArgumentParser(description="Verschlüsselter Passwort-Tresor (PBKDF2-SHA256 + AES-256-GCM)")
-    p.add_argument("--vault", default=dbinit.VAULT_PATH, help="Pfad zur Tresor-Datei")
-    p.add_argument("--master-password", help="für Skripte; sonst interaktive Abfrage")
-    sub = p.add_subparsers(dest="command", required=True)
-
-    sub.add_parser("init", help="neuen Tresor anlegen").set_defaults(func=cmd_init)
-
-    a = sub.add_parser("add", help="Eintrag anlegen")
-    a.add_argument("url")
-    a.add_argument("--password", help="statt interaktiver Abfrage")
-    a.add_argument("--note")
-    a.set_defaults(func=cmd_add)
-
-    l = sub.add_parser("list", help="alle Einträge anzeigen")
-    l.add_argument("--show", action="store_true", help="Passwörter im Klartext zeigen")
-    l.set_defaults(func=cmd_list)
-
-    g = sub.add_parser("get", help="Eintrag anzeigen")
-    g.add_argument("url")
-    g.set_defaults(func=cmd_get)
-
-    d = sub.add_parser("delete", help="Eintrag löschen")
-    d.add_argument("url")
-    d.set_defaults(func=cmd_delete)
-
-    sub.add_parser("passwd", help="Master-Passwort ändern").set_defaults(func=cmd_passwd)
-
-    m = sub.add_parser("migrate", help="alte Klartext-DB verschlüsseln")
-    m.add_argument("--legacy", default=dbinit.LEGACY_DB_PATH)
-    m.set_defaults(func=cmd_migrate)
-    return p
-
-
-def main(argv=None):
-    args = build_parser().parse_args(argv)
-    try:
-        args.func(args)
+        while eintrag_erfassen():
+            anzahl += 1
+    except (KeyboardInterrupt, EOFError):
+        print()
     finally:
         dbinit.lock()
+    print(f"\n{anzahl} Eintrag/Einträge gespeichert in {dbinit.VAULT_PATH}.")
+    print("Ansehen mit: .venv/bin/python show.py")
 
 
 if __name__ == "__main__":
