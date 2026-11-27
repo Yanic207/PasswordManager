@@ -4,57 +4,32 @@ Verschlüsselter Passwort-Tresor: die SQLite-Datenbank liegt **nur verschlüssel
 auf der Platte (`database.vault`) und ist ausschließlich mit dem Master-Passwort
 entschlüsselbar.
 
-## Bedienung
+## Am einfachsten: Fenster statt Terminal
 
-Zwei Dateien, mehr brauchst du nicht:
+**Doppelklick auf `Passwortmanager.command`** im Finder. Fertig.
+
+- Beim ersten Mal: Master-Passwort festlegen (2×).
+- Danach: Master-Passwort eingeben → Tabelle mit allen Einträgen.
+- Felder unten ausfüllen und **Speichern** drücken. Ein Eintrag aus der Tabelle
+  anklicken, um ihn zu ändern; **Löschen** entfernt ihn.
+- **Passwort kopieren** legt es in die Zwischenablage.
+- **Sperren** schließt den Tresor wieder (Schlüssel wird aus dem Speicher geworfen).
+
+Suchen oben filtert live über URL, Benutzername, Passwort und Notiz.
+
+> Falls `brew install python-tk@3.13` noch nicht gelaufen ist, sagt dir das
+> Startskript Bescheid — ohne tkinter gibt es keine Fenster.
+
+## Alternativ: Terminal
 
 ```bash
-cd /Users/yanic/Development/PasswordManager
-
-.venv/bin/python cli.py      # Passwörter erfassen
-.venv/bin/python show.py     # Passwörter ansehen
+.venv/bin/python gui.py      # gleiche Oberfläche, aus dem Terminal
+.venv/bin/python cli.py      # neuer Eintrag, geführt im Terminal
+.venv/bin/python show.py     # alles anzeigen
 ```
 
-### `cli.py` — erfassen
-
-Beim **ersten Start** legt das Skript den Tresor automatisch an und fragt nach
-einem neuen Master-Passwort (2× zur Kontrolle, mind. 8 Zeichen). Ab dem zweiten
-Start wird nur noch nach dem bestehenden Master-Passwort gefragt.
-
-Danach läuft eine Schleife:
-
-```
-URL: github.com
-Benutzername: yanic
-Passwort: ***
-Notiz (optional): Arbeit
-  gespeichert: github.com
-
-URL: ▊                      ← leer lassen + Enter = fertig
-```
-
-Existiert eine URL schon, wird vor dem Überschreiben nachgefragt (`[j/N]`).
-
-### `show.py` — ansehen
-
-```
-Master-Passwort: ***
-
-3 Einträge
-
-URL           BENUTZER   PASSWORT
---------------------------------------
-github.com    yanic      gh-geheim-123
-                Notiz: Arbeit
-```
-
-| Aufruf | Wirkung |
-|---|---|
-| `show.py` | alle Einträge |
-| `show.py git` | nur Treffer in URL / Benutzername / Notiz |
-| `show.py --versteckt` | Passwörter maskieren |
-
-Mit `Strg+C` brichst du jederzeit ab — der Tresor wird dabei sauber geschlossen.
+`show.py` kennt zwei Extras: `show.py git` (Filter) und `show.py --versteckt`
+(Passwörter maskieren).
 
 ## Kryptografie
 
@@ -94,12 +69,14 @@ Läuft ab Python 3.9. Wichtig: `.venv/bin/python` benutzen, sonst fehlt `cryptog
 ## Aufbau
 
 ```
-cli.py               Einträge erfassen (legt den Tresor automatisch an)
-show.py              Einträge anzeigen / filtern
-models/crypto.py     PBKDF2-SHA256, AES-256-GCM, Dateiformat
-models/database.py   Vault: Klartext nur im RAM, atomares Speichern
-models/dbinit.py     API: unlock/lock, CRUD, Passwortwechsel, Migration
-tests/               19 Tests
+Passwortmanager.command   Doppelklick-Start der GUI
+gui.py                    grafische Oberfläche (tkinter)
+cli.py                    Einträge im Terminal erfassen
+show.py                   Einträge im Terminal anzeigen
+models/crypto.py          PBKDF2-SHA256, AES-256-GCM, Dateiformat
+models/database.py        Vault: Klartext nur im RAM, atomares Speichern
+models/dbinit.py          API: unlock/lock, CRUD, Passwortwechsel, Migration
+tests/                    22 Tests
 ```
 
 ## Tests
@@ -107,6 +84,7 @@ tests/               19 Tests
 ```bash
 .venv/bin/python tests/test_vault.py     # Krypto & Vault (10)
 .venv/bin/python tests/test_cli.py       # cli.py + show.py im PTY (7)
+.venv/bin/python tests/test_gui.py       # Fenster, Speichern, Suche (5)
 ```
 
 ## Nützlich zu wissen
